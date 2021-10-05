@@ -16,16 +16,18 @@ numBands.do( {
 });
 )
 
-
+(
+// server options
 o = Server.default.options;
-o.numOutputBusChannels.postln;
 o.numOutputBusChannels = 4;
+o.numOutputBusChannels.postln;
+o.devices.postln;
+)
 
 s.quit;
 s.boot;
 
-s.numChannels
-s.meter(numOuts: 8);
+s.meter(numOuts: 4);
 // break up field recording bands to 8 speakers
 // can explore all ratios 1-8--use nanoKontrol
 // try using mishel falls track
@@ -36,9 +38,10 @@ s.meter(numOuts: 8);
 b = Buffer.read(s, ~path);
 b.play;
 ~size = 2048;
+~stereo = True;
 (
 SynthDef(\brickwall, {
-	arg location=0;
+	arg location=0, id=0, filterLag=30, ampLag=30;
 	var sig, chain, channels=1, size=~size, locations, azim;
 	//locations = [pi, 3pi/4, pi/2, pi/4, 0, 7pi/4, 3pi/2, 5pi/4]
 	locations = (0..7).linlin(1, 8, -pi, pi);
@@ -46,22 +49,140 @@ SynthDef(\brickwall, {
 	azim = Select.kr(location, locations);
 	//azim = MouseX.kr(-pi, pi);
 	//azim = SinOsc.kr(0.15).range(-pi, pi).poll;
-
 	sig = PlayBuf.ar(channels, \buf.kr(0), BufRateScale.ir(\buf.kr(0)), loop: 1);
 	chain = FFT.new( LocalBuf(size), sig); // provide buffer for FFT data and signal
-	chain = PV_BrickWall(chain, \hpf.kr(20).linlin(20, 20000, 0, 1)); // high pass
-	chain = PV_BrickWall(chain, \lpf.kr(20000).linlin(20, 20000, -1, 0)); // low pass
+	chain = PV_BrickWall(chain, \hpf.kr(20, filterLag).linlin(20, 20000, 0, 1)); // high pass
+	chain = PV_BrickWall(chain, \lpf.kr(20000, filterLag).linlin(20, 20000, -1, 0)); // low pass
 
 	sig = IFFT(chain);
 	//sig = FoaEncode.ar(sig, FoaEncoderMatrix.newOmni);
-	sig = FoaEncode.ar(sig, FoaEncoderMatrix.newDirection );
+	sig = FoaEncode.ar(sig, FoaEncoderMatrix.newDirection ); // try HoaEncodeMatrix
 	//sig = FoaPush.ar(sig, MouseX.kr(-pi/2, pi/2)).poll;
 	sig = FoaTransform.ar(sig, 'rotate', azim);
-	sig = FoaDecode.ar(sig, FoaDecoderMatrix.newPanto, mul: \amp.kr(0.0) );
-
+	if( ~stereo == True,
+		{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newStereo, mul: \amp.kr(0.0, ampLag) ) },
+		{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newPanto, mul: \amp.kr(0.0, ampLag) ) }; // try  HoaMatrixDecoder
+	);
+	SendPeakRMS.kr( sig, 20, 3, "/replyAddress", id );
 	Out.ar(\out.kr(0), sig);
 }).add;
 )
+
+(
+// make 8 synths, turned off, filters open
+~synths = Array.fill(8, {
+	arg i;
+	var synth;
+	synth = Synth.new(\brickwall, [
+		\amp, 0.0,
+		\location, i,
+		\hpf, 0,
+		\lpf, 20000,
+		\id, i
+	]);
+	synth;
+});
+// to store amp values for each synth
+~peakRanks = Array.fill(8, { 0 } );
+)
+
+(
+// amp listener
+~ampThresh = 0.000; // how to handle this?
+o = OSCFunc( { arg msg;
+	var id=msg[2], peak=msg[3], rms=msg[4];
+	if( peak > ~ampThresh, {
+		~scanning = False;
+		//"peak: %, rms: %".format(msg[3], msg[4]).postln;
+		//[msg[1], id].postln;
+		~peakRanks[id] = peak;
+		//[~hpf, ~lpf, ~bandSize].postln;
+	});
+}, '/replyAddress');
+)
+
+
+(
+// all on, filters open, lower amp, 2 minute fade
+~synths.do( {
+	arg synth;
+	synth.set(\ampLag, 120, \filterLag, 120, \hpf, 0, \lpf, 20000, \amp, 0.08);
+});
+)
+
+(
+// random filter settings, turn all on
+~bandSize = rrand(10, 200); // random bandSize
+~spacing = rrand(1, 9); // random number of bands between each synth
+~arraySize = ~spacing * 8;
+~fund = rrand(50, 100); // random fundamental 50 - 100 Hz
+~bands = Array.series(~arraySize, ~fund, ~bandSize);
+// set synths
+~synths.do( {
+	arg synth, i;
+	var hpf, lpf;
+	hpf = ~bands[i*~spacing];
+	lpf = ~bands[i*~spacing] + ~bandSize;
+	synth.set(\ampLag, 120, \filterLag, 120, \hpf, hpf, \lpf, lpf, \amp, 0.75);
+});
+)
+s.meter;
+(
+// get loudest synth and turn off
+~loudest = ~peakRanks.maxIndex;
+~synths[~loudest].set(\ampLag, 1, \amp, 0.0);
+Task( {
+	1.wait;
+	~peakRanks[~loudest] = 0;
+	[~loudest, ~peakRanks].postln;
+}).start;
+)
+
+
+~peakRanks.maxIndex;
+
+a = [4, 2, 6, 2, 44, 2, 43];
+a.maxIndex
+a[3] = 0;
+a
+
+(
+~scanning = True;
+~bandSize = 50;
+~hpf = 100;
+~lpf = ~hpf + ~bandSize;
+~timeGrain = 0.05;
+
+/*
+can try this scanning thing to find loud bands,
+OR just do the random thing and listen to each band and sort them by amplitude to remove one by one or make subgroups
+*/
+
+r = Task.new( {
+	loop {
+		if( ~scanning == True, {
+			~hpf = ~hpf + 1;
+			~lpf = ~hpf + ~bandSize;
+			x.set(\hpf, ~hpf, \lpf, ~lpf);
+			"scanning".postln;
+		});
+		~timeGrain.wait;
+	};
+});
+)
+
+r.start;
+(
+// reset
+~bandSize = 100;
+~hpf = 50;
+)
+~scanning = True;
+r.reset;
+r.start;
+
+
+
 (
 ~size = 60;
 ~bands = Array.series(16, 60, ~size);
@@ -78,13 +199,7 @@ SynthDef(\brickwall, {
 });
 )
 
-(
-// all on
-~synths.do( {
-	arg synth;
-	synth.set(\amp, 1.0);
-});
-)
+
 (
 ~size = 180;
 ~bands = Array.series(24, 60, ~size);
@@ -114,6 +229,9 @@ SynthDef(\brickwall, {
 	Synth(\brickwall);
 });
 )
+
+
+
 
 (
 ~spacing = 2;
