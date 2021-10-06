@@ -1,17 +1,22 @@
 (
 // server options
 o = Server.default.options;
-o.numOutputBusChannels = 4;
+o.numOutputBusChannels = 7;
 o.numOutputBusChannels.postln;
 s.boot;
 )
+
 (
 // SYNTH, LISTENER, GLOBALS, BUFFER, FUNCTIONS
 ~stereo = False; // for testing
 ~size = 2048;
+~directions = [ [-45*(pi/180), 22*(pi/180)], [45*(pi/180), 22*(pi/180)], [-135*(pi/180), -22*(pi/180)], [135*(pi/180), -22*(pi/180)], [0, -55*(pi/180)], [180*(pi/180), 55*(pi/180)] ];
+~sub = Bus.audio(s, 1);
+~satellites = Bus.audio(s, 6);
+
 SynthDef(\brickwall, {
 	arg location=0, id=0, filterLag=30, ampLag=30, curve=0;
-	var sig, chain, channels=1, size=~size, locations, azim;
+	var sig, subSig, chain, channels=1, size=~size, locations, azim;
 	//locations = [pi, 3pi/4, pi/2, pi/4, 0, 7pi/4, 3pi/2, 5pi/4]
 	locations = (0..7).linlin(1, 8, -pi, pi);
 	//location.poll;
@@ -30,15 +35,32 @@ SynthDef(\brickwall, {
 	//sig = FoaPush.ar(sig, MouseX.kr(-pi/2, pi/2)).poll;
 	//sig = FoaTransform.ar(sig, 'rotate', azim);
 	sig = HoaRotate.ar(sig, azim, 3);
+	//subSig = sig;
+
 	if( ~stereo == True,
 		//{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newStereo, mul: VarLag.kr(\amp.kr(0.0), ampLag, curve) ) },
 		{ sig = HoaDecodeMatrix.ar(sig, HoaMatrixDecoder.newPanto) * VarLag.kr(\amp.kr(0.0), ampLag, curve ) },
-		{ sig = HoaDecodeMatrix.ar(sig, HoaMatrixDecoder.newPanto) * VarLag.kr(\amp.kr(0.0), ampLag, curve ) };
+		{ sig = HoaDecodeMatrix.ar(sig, HoaMatrixDecoder.newProjection(~directions, order: 3)) * VarLag.kr(\amp.kr(0.0), ampLag, curve ) };
 		//{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newQuad, mul: VarLag.kr(\amp.kr(0.0), ampLag, curve) ) }; // try  HoaMatrixDecoder
 	);
 	SendPeakRMS.kr( sig, 20, 3, "/replyAddress", id );
-	Out.ar(\out.kr(0), sig);
+
+	Out.ar(~satellites, sig);
+	Out.ar(~sub, sig);
 }).add;
+
+SynthDef(\sub, {
+	var sig;
+	sig = In.ar(~sub, 1) * 0.707;
+	Out.ar(6, sig);
+}).add;
+
+SynthDef(\satellites, {
+	var sig;
+	sig = In.ar(~satellites, 6);
+	Out.ar(0, sig);
+}).add;
+
 
 // amp listener
 ~ampThresh = 0.000; // how to handle this?
@@ -129,8 +151,12 @@ b = Buffer.read(s, ~path);
 });
 // to store amp values for each synth
 ~peakRanks = Array.fill(8, { 0 } );
-)
 
+
+~satellitesOut = Synth(\satellites, addAction: 'addToTail');
+~subOut = Synth(\sub, addAction: 'addToTail');
+)
+s.plotTree;
 (
 // FORM
 Task( {
@@ -141,7 +167,7 @@ Task( {
 	"PART 2".postln;
 	// PART 2, random filter setting, 2 minute amp/filter fade
 	// random filter settings, turn all on
-	~randomReset.value(ampFadeTime: 150, filterFadeTime: 135, curve: 7, spacingMin: 2, spacingMax:5); // curve=8 worked okay, trying lower vals
+	~randomReset.value(ampFadeTime: 150, filterFadeTime: 135, curve: 6, spacingMin: 2, spacingMax:5); // curve=8 worked okay, trying lower vals
 	135.wait;
 	5.wait; // extra wait time to hold
 	"PART 3".postln;
