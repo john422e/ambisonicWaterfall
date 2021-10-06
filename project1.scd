@@ -1,45 +1,14 @@
 (
-var numBands=8;
-var minFreq=60;
-var minBandSize=130;
-
-p = minFreq;
-numBands.do( {
-	arg i;
-	var power = i+1, bandSize, lowFreq, highFreq;
-	bandSize = minBandSize * power;
-	lowFreq = p;
-	highFreq = p + bandSize;
-	["BAND:", bandSize, "RANGES:", lowFreq, highFreq].postln;
-	// set p
-	p = highFreq;
-});
-)
-
-(
 // server options
 o = Server.default.options;
 o.numOutputBusChannels = 4;
 o.numOutputBusChannels.postln;
-o.devices.postln;
-)
-
-s.quit;
 s.boot;
-
-s.meter(numOuts: 4);
-// break up field recording bands to 8 speakers
-// can explore all ratios 1-8--use nanoKontrol
-// try using mishel falls track
-// look for loudest and softest amp combos
-// map 8 sliders to consistantly be low to high, but have the speaker mapping randomized each time
-
-~path = PathName.new(thisProcess.nowExecutingPath).parentPath ++ "st6.wav";
-b = Buffer.read(s, ~path);
-b.play;
-~size = 2048;
-~stereo = True;
+)
 (
+// SYNTH, LISTENER, GLOBALS, BUFFER, FUNCTIONS
+~stereo = True; // for testing
+~size = 2048;
 SynthDef(\brickwall, {
 	arg location=0, id=0, filterLag=30, ampLag=30;
 	var sig, chain, channels=1, size=~size, locations, azim;
@@ -66,7 +35,77 @@ SynthDef(\brickwall, {
 	SendPeakRMS.kr( sig, 20, 3, "/replyAddress", id );
 	Out.ar(\out.kr(0), sig);
 }).add;
+
+// amp listener
+~ampThresh = 0.000; // how to handle this?
+o = OSCFunc( { arg msg;
+	var id=msg[2], peak=msg[3], rms=msg[4];
+	if( peak > ~ampThresh, {
+		//~scanning = False;
+		//"peak: %, rms: %".format(msg[3], msg[4]).postln;
+		//[msg[1], id].postln;
+		~peakRanks[id] = peak;
+		//[~hpf, ~lpf, ~bandSize].postln;
+	});
+}, '/replyAddress');
+
+~path = PathName.new(thisProcess.nowExecutingPath).parentPath ++ "st6.wav";
+b = Buffer.read(s, ~path);
+
+~fullReset = {
+	arg synths, fadeTime=1, amp=0.1;
+	synths.do( {
+		arg synth;
+		var hpf=0, lpf=20000;
+		synth.set(\ampLag, fadeTime, \filterLag, fadeTime, \hpf, hpf, \lpf, lpf, \amp, amp);
+	});
+};
+
+~randomReset = {
+	arg fadeTime=1, spacingMax=9, amp=0.75;
+	// make these local vars here, get rid of globals
+	// random filter settings, turn all on
+	~bandSize = rrand(10, 200); // random bandSize
+	~spacing = rrand(1, spacingMax).postln; // random number of bands between each synth
+	~arraySize = ~spacing * 8;
+	~fund = rrand(50, 100); // random fundamental 50 - 100 Hz
+	~bands = Array.series(~arraySize, ~fund, ~bandSize);
+	// set synths
+	~synths.do( {
+		arg synth, i;
+		var hpf, lpf;
+		hpf = ~bands[i*~spacing];
+		lpf = ~bands[i*~spacing] + ~bandSize;
+		synth.set(\ampLag, fadeTime, \filterLag, fadeTime, \hpf, hpf, \lpf, lpf, \amp, amp);
+	});
+};
+
+~setAmps = {
+	arg synths, amp, ampLag=0.01;
+	synths.do( {
+		arg synth;
+		synth.set(\ampLag, ampLag, \amp, amp);
+	});
+};
+
+~filterCycle = {
+	// get loudest synth and turn off
+	Task( {
+		7.do( {
+			~loudest = ~peakRanks.maxIndex;
+			~synths[~loudest].set(\ampLag, 1, \amp, 0.0);
+			3.wait;
+			~peakRanks[~loudest] = 0;
+			[~loudest, ~peakRanks].postln;
+		});
+		3.wait;
+		~randomReset.value(0.01, amp: 0.0);
+		1.5.wait;
+		~setAmps.value(~synths, 0.75);
+	}).start;
+};
 )
+
 
 (
 // make 8 synths, turned off, filters open
@@ -87,19 +126,53 @@ SynthDef(\brickwall, {
 )
 
 (
-// amp listener
-~ampThresh = 0.000; // how to handle this?
-o = OSCFunc( { arg msg;
-	var id=msg[2], peak=msg[3], rms=msg[4];
-	if( peak > ~ampThresh, {
-		~scanning = False;
-		//"peak: %, rms: %".format(msg[3], msg[4]).postln;
-		//[msg[1], id].postln;
-		~peakRanks[id] = peak;
-		//[~hpf, ~lpf, ~bandSize].postln;
-	});
-}, '/replyAddress');
+// PART 1, filters open, soft
+~setAmps.value(~synths, 0.1, 0.5);
 )
+
+(
+// PART 2, random filter setting, 2 minute amp/filter fade
+// random filter settings, turn all on
+~randomReset.value(120, 5);
+)
+
+(
+// PART 3, turn off one at a time, 3 seconds each, loudest until one remaining
+~iterations = 3;
+Task( {
+	~iterations.do( {
+		~filterCycle.value();
+		25.5.wait; // enough time for cycle to complete
+		12.wait; // additional wait time
+	});
+}).start;
+)
+
+(
+// Part 4, fade to open filter
+~fullReset.value(~synths, 180);
+)
+
+(
+var numBands=8;
+var minFreq=60;
+var minBandSize=130;
+
+p = minFreq;
+numBands.do( {
+	arg i;
+	var power = i+1, bandSize, lowFreq, highFreq;
+	bandSize = minBandSize * power;
+	lowFreq = p;
+	highFreq = p + bandSize;
+	["BAND:", bandSize, "RANGES:", lowFreq, highFreq].postln;
+	// set p
+	p = highFreq;
+});
+)
+
+
+
 
 
 (
@@ -140,11 +213,6 @@ Task( {
 
 
 ~peakRanks.maxIndex;
-
-a = [4, 2, 6, 2, 44, 2, 43];
-a.maxIndex
-a[3] = 0;
-a
 
 (
 ~scanning = True;
