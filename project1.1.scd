@@ -10,7 +10,7 @@ s.boot;
 ~stereo = True; // for testing
 ~size = 2048;
 SynthDef(\brickwall, {
-	arg location=0, id=0, filterLag=30, ampLag=30;
+	arg location=0, id=0, filterLag=30, ampLag=30, curve=0;
 	var sig, chain, channels=1, size=~size, locations, azim;
 	//locations = [pi, 3pi/4, pi/2, pi/4, 0, 7pi/4, 3pi/2, 5pi/4]
 	locations = (0..7).linlin(1, 8, -pi, pi);
@@ -20,8 +20,8 @@ SynthDef(\brickwall, {
 	//azim = SinOsc.kr(0.15).range(-pi, pi).poll;
 	sig = PlayBuf.ar(channels, \buf.kr(0), BufRateScale.ir(\buf.kr(0)), loop: 1);
 	chain = FFT.new( LocalBuf(size), sig); // provide buffer for FFT data and signal
-	chain = PV_BrickWall(chain, \hpf.kr(20, filterLag).linlin(20, 20000, 0, 1)); // high pass
-	chain = PV_BrickWall(chain, \lpf.kr(20000, filterLag).linlin(20, 20000, -1, 0)); // low pass
+	chain = PV_BrickWall(chain, VarLag.kr(\hpf.kr(20), filterLag, curve).linlin(20, 20000, 0, 1)); // high pass
+	chain = PV_BrickWall(chain, VarLag.kr(\lpf.kr(20000), filterLag, curve).linlin(20, 20000, -1, 0)); // low pass
 	sig = IFFT(chain);
 
 	//sig = FoaEncode.ar(sig, FoaEncoderMatrix.newOmni);
@@ -29,8 +29,8 @@ SynthDef(\brickwall, {
 	//sig = FoaPush.ar(sig, MouseX.kr(-pi/2, pi/2)).poll;
 	sig = FoaTransform.ar(sig, 'rotate', azim);
 	if( ~stereo == True,
-		{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newStereo, mul: \amp.kr(0.0, ampLag) ) },
-		{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newPanto, mul: \amp.kr(0.0, ampLag) ) }; // try  HoaMatrixDecoder
+		{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newStereo, mul: VarLag.kr(\amp.kr(0.0), ampLag, curve) ) },
+		{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newPanto, mul: VarLag.kr(\amp.kr(0.0), ampLag, curve) ) }; // try  HoaMatrixDecoder
 	);
 	SendPeakRMS.kr( sig, 20, 3, "/replyAddress", id );
 	Out.ar(\out.kr(0), sig);
@@ -53,17 +53,17 @@ o = OSCFunc( { arg msg;
 b = Buffer.read(s, ~path);
 
 ~fullReset = {
-	arg synths, fadeTime=1, amp=0.1;
+	arg synths, fadeTime=1, curve=8, amp=0.1;
 	synths = synths.scramble;
 	synths.do( {
 		arg synth;
 		var hpf=0, lpf=20000;
-		synth.set(\ampLag, fadeTime, \filterLag, fadeTime, \hpf, hpf, \lpf, lpf, \amp, amp);
+		synth.set(\ampLag, fadeTime, \filterLag, fadeTime, \curve, curve, \hpf, hpf, \lpf, lpf, \amp, amp);
 	});
 };
 
 ~randomReset = {
-	arg ampFadeTime=1, filterFadeTime=1, spacingMin=1, spacingMax=9, amp=0.75;
+	arg ampFadeTime=1, filterFadeTime=1, curve=8, spacingMin=1, spacingMax=9, amp=0.75;
 	// make these local vars here, get rid of globals
 	// random filter settings, turn all on
 	~bandSize = rrand(10, 200); // random bandSize
@@ -77,7 +77,7 @@ b = Buffer.read(s, ~path);
 		var hpf, lpf;
 		hpf = ~bands[i*~spacing];
 		lpf = ~bands[i*~spacing] + ~bandSize;
-		synth.set(\ampLag, ampFadeTime, \filterLag, filterFadeTime, \hpf, hpf, \lpf, lpf, \amp, amp);
+		synth.set(\ampLag, ampFadeTime, \filterLag, filterFadeTime, \curve, curve, \hpf, hpf, \lpf, lpf, \amp, amp);
 	});
 };
 
@@ -101,7 +101,7 @@ b = Buffer.read(s, ~path);
 			[~loudest, ~peakRanks].postln;
 		});
 		3.wait;
-		~randomReset.value(0.01, 0.01, spacingMin, spacingMax, amp: 0.0);
+		~randomReset.value(ampFadeTime: 0.01, filterFadeTime: 0.01, spacingMin: spacingMin, spacingMax: spacingMax, amp: 0.0);
 		1.5.wait;
 		~setAmps.value(~synths, 0.75);
 	}).start;
@@ -137,8 +137,9 @@ Task( {
 	"PART 2".postln;
 	// PART 2, random filter setting, 2 minute amp/filter fade
 	// random filter settings, turn all on
-	~randomReset.value(150, 135, 2, 5);
+	~randomReset.value(ampFadeTime: 150, filterFadeTime: 135, curve: 7, spacingMin: 2, spacingMax:5); // curve=8 worked okay, trying lower vals
 	135.wait;
+	5.wait; // extra wait time to hold
 	"PART 3".postln;
 	// PART 3, turn off one at a time, 3 seconds each, loudest until one remaining
 	~iterations = 4;
@@ -154,8 +155,9 @@ Task( {
 	150.wait;
 	"PART 4".postln;
 	// Part 4, fade to open filter
-	~fullReset.value(~synths, 180);
+	~fullReset.value(synths: ~synths, fadeTime: 180, curve: 10);
 	180.wait;
+	8.wait; // extra time to hold before cutting
 	"PART 5".postln;
 	// Part 5, end—turn off one at a time
 	Task( {
@@ -168,5 +170,3 @@ Task( {
 	}).start;
 }).start;
 )
-
-NamedControl
