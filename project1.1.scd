@@ -7,7 +7,7 @@ s.boot;
 )
 (
 // SYNTH, LISTENER, GLOBALS, BUFFER, FUNCTIONS
-~stereo = True; // for testing
+~stereo = False; // for testing
 ~size = 2048;
 SynthDef(\brickwall, {
 	arg location=0, id=0, filterLag=30, ampLag=30, curve=0;
@@ -25,12 +25,16 @@ SynthDef(\brickwall, {
 	sig = IFFT(chain);
 
 	//sig = FoaEncode.ar(sig, FoaEncoderMatrix.newOmni);
-	sig = FoaEncode.ar(sig, FoaEncoderMatrix.newDirection ); // try HoaEncodeMatrix
+	//sig = FoaEncode.ar(sig, FoaEncoderMatrix.newDirection ); // try HoaEncodeMatrix, HoaMatrixEncoder
+	sig = HoaEncodeMatrix.ar(sig, HoaMatrixEncoder.newDirection(order: 3));
 	//sig = FoaPush.ar(sig, MouseX.kr(-pi/2, pi/2)).poll;
-	sig = FoaTransform.ar(sig, 'rotate', azim);
+	//sig = FoaTransform.ar(sig, 'rotate', azim);
+	sig = HoaRotate.ar(sig, azim, 3);
 	if( ~stereo == True,
-		{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newStereo, mul: VarLag.kr(\amp.kr(0.0), ampLag, curve) ) },
-		{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newPanto, mul: VarLag.kr(\amp.kr(0.0), ampLag, curve) ) }; // try  HoaMatrixDecoder
+		//{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newStereo, mul: VarLag.kr(\amp.kr(0.0), ampLag, curve) ) },
+		{ sig = HoaDecodeMatrix.ar(sig, HoaMatrixDecoder.newPanto) * VarLag.kr(\amp.kr(0.0), ampLag, curve ) },
+		{ sig = HoaDecodeMatrix.ar(sig, HoaMatrixDecoder.newPanto) * VarLag.kr(\amp.kr(0.0), ampLag, curve ) };
+		//{ sig = FoaDecode.ar(sig, FoaDecoderMatrix.newQuad, mul: VarLag.kr(\amp.kr(0.0), ampLag, curve) ) }; // try  HoaMatrixDecoder
 	);
 	SendPeakRMS.kr( sig, 20, 3, "/replyAddress", id );
 	Out.ar(\out.kr(0), sig);
